@@ -9,7 +9,7 @@ discriminator to capture differences in behavior due to item substitution, which
 to invasive augmentations. 
 
 
-![avatar](ECL.png)
+![avatar](ecl.png)
 
 ## Preparation
 Our code is based on PyTorch 1.8.1 and runnable for both windows and ubuntu server. Required python packages:
