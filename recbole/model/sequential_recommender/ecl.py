@@ -19,13 +19,9 @@ import torch
 from torch import nn
 
 from recbole.model.abstract_recommender import SequentialRecommender
-from recbole.model.layers import TransformerEncoder
-from recbole.model.loss import BPRLoss
 from . import SASRecP, BERT4Rec
 import random
 import numpy as np
-from time import time
-import torch.nn.functional as F
 
 class ECL(SequentialRecommender):
     r"""

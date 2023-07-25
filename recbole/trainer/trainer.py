@@ -671,13 +671,7 @@ class ECLTrainer(PretrainTrainer):
         super(ECLTrainer, self).__init__(config, model)
 
     def fit(self, train_data, valid_data=None, verbose=True, saved=True, show_progress=False, callback_fn=None):
-        print('self.model.train_stage', self.model.train_stage)
-        if self.model.train_stage == 'pretrain':
-            return self.pretrain(train_data, verbose, show_progress)
-        elif self.model.train_stage in ['finetune','alltrain']:
-            return super().fit(train_data, valid_data, verbose, saved, show_progress, callback_fn)
-        else:
-            raise ValueError("Please make sure that the 'train_stage' is 'pretrain' or 'finetune'!")
+        return super().fit(train_data, valid_data, verbose, saved, show_progress, callback_fn)
 
 
 class MKRTrainer(Trainer):
