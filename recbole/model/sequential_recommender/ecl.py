@@ -40,10 +40,6 @@ class ECL(SequentialRecommender):
     def __init__(self, config, dataset):
         super(ECL, self).__init__(config, dataset)
 
-
-        self.train_stage = config['train_stage']
-        assert self.train_stage in ['pretrain', 'finetune', 'alltrain']
-
         # load parameters info
         self.initializer_range = config['initializer_range']
 
@@ -108,28 +104,6 @@ class ECL(SequentialRecommender):
         self.perturb_eps = config['perturb_eps']
 
 
-        # ablation:
-        #    wocl: contrastive_loss_weight = 0
-        #    wodl: discriminator_loss_weight = 0, generate_loss_weight = 0
-        #    wodlp: discriminator_loss_weight = 0, generate_loss_weight = 0, additional positive
-        #    wodln: discriminator_loss_weight = 0, generate_loss_weight = 0, additional negative
-        #    ran:   random generate
-        self.ablation = config['ablation']
-        if self.ablation == 'wocl':
-            self.always_con = False
-            self.con_loss_weight = 0
-        if self.ablation in ['wodl']:
-            self.always_con = True
-            self.discrim_loss_weight = 0
-            self.generate_loss_weight = 0
-        if self.ablation in ['wodlp', 'wodln']:
-            self.always_con = True
-            self.discrim_loss_weight = 0
-            self.generator.item_embedding = nn.Embedding(self.n_items + 1, self.hidden_size, padding_idx=0)  # mask token add 1
-        if self.ablation in ['ran','insert','delete', 'combine', 'crop', 'reorder']:
-            self.generate_loss_weight = 0
-            # self.generator = None
-
 
         self.auto_weight = config['auto_weight']
         if self.auto_weight:
@@ -139,41 +113,12 @@ class ECL(SequentialRecommender):
 
 
         # parameters initialization
-        if self.train_stage in ['pretrain', 'alltrain']:
-            self.apply(self._init_weights)
-            self.encoder.apply(self._init_weights)
-            if self.discrim_loss_weight != 0:
-                self.discriminator.apply(self._init_weights)
-            if self.generate_loss_weight != 0:
-                self.generator.apply(self._init_weights)
-
-            # @todo If pretrain generator, use its item emb
-            # state_dict = torch.load(config['generator_path'])['state_dict']
-            # self.generator.load_state_dict(state_dict)
-            # for name, param in self.generator.named_parameters():
-            #     param.requires_grad = False
-            # self.item_embedding = nn.Embedding.from_pretrained(self.generator.item_embedding.weight, freeze=False)
-
-            # @todo If no pretrain generator, use new item emb
-            # self.generator.item_embedding = self.item_embedding
-            # if self.ablation in ['wodlp', 'wodln']:
-            #     state_dict = torch.load(config['generator_path'])['state_dict']
-            #     self.generator.load_state_dict(state_dict)
-            #     for name, param in self.generator.named_parameters():
-            #         param.requires_grad = False
-
-            # self.encoder.item_embedding = self.item_embedding
-            # self.discriminator.item_embedding = self.item_embedding
-        else:
-            self.item_embedding = nn.Embedding(self.n_items + 1, self.hidden_size, padding_idx=0)  # mask token add 1
-            self.generator.item_embedding = self.item_embedding
-            self.encoder.item_embedding = self.item_embedding
-            self.discriminator.item_embedding = self.item_embedding
-
-            # load pretrained model for finetune
-            # pretrained = torch.load(self.pre_model_path)
-            # self.logger.info(f'Load pretrained model from {self.pre_model_path}')
-            # self.load_state_dict(pretrained['state_dict'])
+        self.apply(self._init_weights)
+        self.encoder.apply(self._init_weights)
+        if self.discrim_loss_weight != 0:
+            self.discriminator.apply(self._init_weights)
+        if self.generate_loss_weight != 0:
+            self.generator.apply(self._init_weights)
 
         self.recall, self.recall_n = 0, 0
 
@@ -227,46 +172,17 @@ class ECL(SequentialRecommender):
         encode_output = encode_output
         # encode_output = self.gather_indexes(encode_output, item_seq_len - 1)
 
-        if self.train_stage in ['finetune'] or (self.state == 'sr' and self.discrim_loss_weight == 0 and self.generate_loss_weight == 0):
-            return encode_output, None, None, None, torch.tensor(0), None
+        masked_item_seq, ori_items, rep_items, pos_items, masked_index = self.reconstruct_train_data(item_seq,type=self.ridl_type)
+        generate_seq, generate_loss = self.generator.predictSeq(masked_item_seq, masked_index, pos_items)
 
-        generate_seq, generate_loss = None, torch.tensor(0)
-        if self.ablation == 'ran':
-            # Use random generator
-            generate_seq = self.generate_train_data_random(item_seq)
-        elif self.ablation == 'insert':
-            generate_seq = self.generate_train_data_random_insert(item_seq)
-        elif self.ablation == 'delete':
-            generate_seq = self.generate_train_data_random_delete(item_seq)
-        elif self.ablation == 'crop':
-            generate_seq = self.generate_train_data_random_crop(item_seq)
-        elif self.ablation == 'reorder':
-            generate_seq = self.generate_train_data_random_reorder(item_seq)
-        elif self.ablation == 'combine':
-            generate_seq1 = self.generate_train_data_random(item_seq)
-            generate_seq2 = self.generate_train_data_random_insert(item_seq)
-            generate_seq3 = self.generate_train_data_random_delete(item_seq)
-            generate_seq = torch.zeros_like(generate_seq3)
-            seqs = [generate_seq1, generate_seq2, generate_seq3]
-            for i in range(item_seq.size(0)):
-                idx = random.randint(0,2)
-                generate_seq[i] = seqs[idx][i]
-        else:
-            masked_item_seq, ori_items, rep_items, pos_items, masked_index = self.reconstruct_train_data(item_seq,type=self.ridl_type)
-            # print('generate recons time', time() - t)
-
-            generate_seq, generate_loss = self.generator.predictSeq(masked_item_seq, masked_index, pos_items)
-            # print('generate predict time', time() - t)
-
-            # To monitor it
-            all_rep = torch.sum(rep_items)
-            all_ori = torch.sum(ori_items)
-            all_pad = (item_seq == 0).long().sum()
-            eql_items = (item_seq == generate_seq).long().sum() - all_pad
-            recall = (eql_items.item() - all_ori.item()) / all_rep.item()
-            self.recall += recall
-            self.recall_n += 1
-            # print('monitor time', time() - t)
+        # To monitor it
+        all_rep = torch.sum(rep_items)
+        all_ori = torch.sum(ori_items)
+        all_pad = (item_seq == 0).long().sum()
+        eql_items = (item_seq == generate_seq).long().sum() - all_pad
+        recall = (eql_items.item() - all_ori.item()) / all_rep.item()
+        self.recall += recall
+        self.recall_n += 1
 
         if self.discrim_loss_weight == 0:
             return encode_output, None, None, None, generate_loss, None
@@ -277,7 +193,6 @@ class ECL(SequentialRecommender):
         new_rep = (item_seq != 0).long() - new_ori
 
         discrim_output, flat_discrim_output = self.forward_discriminator(encode_output, generate_seq, item_seq_len)
-        # print('discrim time', time() - t)
 
         discrim = self.discriminator_linear(flat_discrim_output)
         replace_prob = torch.sigmoid(discrim).view(-1)
@@ -359,24 +274,10 @@ class ECL(SequentialRecommender):
 
         con_loss = 0
         # Used to calculate contrastive loss
-        seq_output_1 = self.encoder.forward(item_seq, item_seq_len)
-        seq_output_2 = self.encoder.forward(new_seq, item_seq_len)
-        if self.ablation == 'wodlp':
-            loss1 = self.calculate_con_loss(seq_output, seq_output_1)
-            loss2 = self.calculate_con_loss(seq_output, seq_output_2)
-            con_loss = loss2 + loss1
-        if self.ablation == 'wodln':
-            new_seq_out = torch.cat((seq_output_1, seq_output_2), dim=0)
-            con_loss = self.calculate_con_loss(seq_output, new_seq_out)
-
-
 
         return self.encode_loss_weight * encode_loss, self.con_loss_weight * con_loss, self.generate_loss_weight * gen_loss
 
     def calculate_loss(self, interaction):
-        if self.ablation in ['wodln', 'wodlp']:
-            return self.calculate_mask_cse_loss(interaction)
-
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         seq_output, replace_prob, ori_items, rep_items, generate_loss, discrim_output = self.forward(item_seq, item_seq_len)
@@ -385,97 +286,40 @@ class ECL(SequentialRecommender):
         pos_items = interaction[self.POS_ITEM_ID]
 
 
-        encode_loss = torch.tensor(0)
-        if self.train_stage in ['finetune', 'alltrain']:
-            if self.disable_aug == 'y' or self.disable_aug == 'h' or self.disable_aug == 'hm':
-                item_label = item_seq[:, 1:]
-                pad = pos_items.unsqueeze(-1)
-                item_labeln = torch.cat((item_label, pad), dim=-1).long().to(self.device)
-                seq_emb = seq_output.view(-1, self.hidden_size)  # [batch*seq_len hidden_size]
-                test_item_emb = self.item_embedding.weight[:-1,:]
-                logits = torch.matmul(seq_emb, test_item_emb.transpose(0, 1))
-                pos_ids_l = torch.squeeze(item_labeln.view(-1))
-                encode_loss = self.loss_fct(logits, pos_ids_l)
-            else:
-                seq_emb = seq_output[:, -1, :].squeeze(1)  # [batch hidden_size]
-                test_item_emb = self.item_embedding.weight[:-1, :]
-                logits = torch.matmul(seq_emb, test_item_emb.transpose(0, 1))
-                encode_loss = self.loss_fct(logits, pos_items)
+        if self.disable_aug == 'y' or self.disable_aug == 'h' or self.disable_aug == 'hm':
+            item_label = item_seq[:, 1:]
+            pad = pos_items.unsqueeze(-1)
+            item_labeln = torch.cat((item_label, pad), dim=-1).long().to(self.device)
+            seq_emb = seq_output.view(-1, self.hidden_size)  # [batch*seq_len hidden_size]
+            test_item_emb = self.item_embedding.weight[:-1,:]
+            logits = torch.matmul(seq_emb, test_item_emb.transpose(0, 1))
+            pos_ids_l = torch.squeeze(item_labeln.view(-1))
+            encode_loss = self.loss_fct(logits, pos_ids_l)
+        else:
+            seq_emb = seq_output[:, -1, :].squeeze(1)  # [batch hidden_size]
+            test_item_emb = self.item_embedding.weight[:-1, :]
+            logits = torch.matmul(seq_emb, test_item_emb.transpose(0, 1))
+            encode_loss = self.loss_fct(logits, pos_items)
 
 
 
 
         discrim_loss = torch.tensor(0)
         # by current step
-        if self.train_stage in ['pretrain', 'alltrain'] and self.discrim_loss_weight != 0:
+        if self.discrim_loss_weight != 0:
             pos_loss = torch.log(replace_prob.clamp(min=1e-8, max=1-1e-8)) * rep_items
             neg_loss = torch.log((1-replace_prob).clamp(min=1e-8, max=1-1e-8)) * ori_items
             rep_n, ori_n = rep_items.sum(), ori_items.sum()
-            # print(torch.sum(pos_loss).item(), torch.sum(neg_loss).item(), rep_n.item(), ori_n.item())
             discrim_loss = torch.sum(-pos_loss-neg_loss)/torch.sum(rep_n + ori_n).clamp(min=1)
-
-        # by next step
-        # if self.train_stage in ['pretrain', 'alltrain'] and self.discrim_loss_weight != 0:
-        #     label_embs = self.item_embedding(item_labeln)
-        #     logits = torch.sigmoid((label_embs * discrim_output).sum(dim=-1))
-        #     replace_prob = logits.reshape(-1, 1)
-        #
-        #     pos_loss = torch.log(replace_prob.clamp(min=1e-8, max=1 - 1e-8)) * ori_items
-        #     neg_loss = torch.log((1 - replace_prob).clamp(min=1e-8, max=1 - 1e-8)) * rep_items
-        #     rep_n, ori_n = rep_items.sum(), ori_items.sum()
-        #     # print(torch.sum(pos_loss).item(), torch.sum(neg_loss).item(), rep_n.item(), ori_n.item())
-        #     discrim_loss = torch.sum(-pos_loss - neg_loss) / torch.sum(rep_n + ori_n).clamp(min=1)
 
 
         con_loss = torch.tensor(0)
-        if self.train_stage in ['pretrain', 'alltrain'] and self.con_loss_weight != 0 and (self.state == 'sr' or self.always_con):
+        if self.con_loss_weight != 0 and (self.state == 'sr' or self.always_con):
             # Used to calculate contrastive loss
-            if self.contras_forward == 'norm':
-                seq_output_1 = F.normalize(seq_output, p=2, dim=-1)
-                # seq_output_1 = torch.norm(seq_output, dim=-1)
-            elif self.contras_forward == 'perturb':
-                random_noise = torch.rand(seq_output.shape).to(self.device)
-                seq_output_norm = F.normalize(random_noise, p=2, dim=1)
-                seq_output_1 = seq_output + torch.sign(seq_output) * seq_output_norm * self.perturb_eps
-            elif self.contras_forward == 'ran':
-                # Use random generator
-                generate_seq = self.generate_train_data_random(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            elif self.contras_forward == 'insert':
-                generate_seq = self.generate_train_data_random_insert(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            elif self.contras_forward == 'delete':
-                generate_seq = self.generate_train_data_random_delete(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            elif self.contras_forward == 'crop':
-                generate_seq = self.generate_train_data_random_crop(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            elif self.contras_forward == 'mask':
-                generate_seq, _, _, _, _ = self.reconstruct_train_data(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            elif self.contras_forward == 'reorder':
-                generate_seq = self.generate_train_data_random_reorder(item_seq)
-                generate_seq_len = (generate_seq != 0).sum(1)
-                seq_output_1 = self.encoder.forward(generate_seq, generate_seq_len)
-            else:
-                seq_output_1 = self.encoder.forward(item_seq, item_seq_len)
+            seq_output_1 = self.encoder.forward(item_seq, item_seq_len)
             con_loss = self.calculate_con_loss(seq_output, seq_output_1)
 
-        # print('all cal loss time', time() - t)
-
-        if self.train_stage == 'pretrain':
-            return self.discrim_loss_weight * discrim_loss, self.con_loss_weight * con_loss
-
-        if self.train_stage == 'finetune':
-            return self.encode_loss_weight * encode_loss
-
-        if self.train_stage == 'alltrain':
-            return self.encode_loss_weight * encode_loss, self.con_loss_weight * con_loss, self.discrim_loss_weight * discrim_loss, self.generate_loss_weight * generate_loss
+        return self.encode_loss_weight * encode_loss, self.con_loss_weight * con_loss, self.discrim_loss_weight * discrim_loss, self.generate_loss_weight * generate_loss
 
     def predict(self, interaction):
         item_seq = interaction[self.ITEM_SEQ]

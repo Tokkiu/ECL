@@ -39,10 +39,6 @@ $ tree
     ├── yelp.item
     └── yelp.user
  ```
-## Usage
-
-
-Run `ECL.sh`.
 
 ## Reproduction
 See _benchmarks_ folder to reproduce the results.
@@ -64,6 +60,7 @@ If you find this repo useful, please cite
 ```
 
 ## Credit
+The code is based on [Recbole](recbole.io).
 
 ## Contact
 Feel free to contact us if there is any question. (Peilin Zhou, zhoupalin@gmail.com; Jingqi Gao, mrgao.ary@gmail.com; YueqiXIE, yxieay@connect.ust.hk;)
