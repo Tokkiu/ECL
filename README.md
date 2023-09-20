@@ -49,13 +49,12 @@ Due to some stochastic factors, slightly tuning the hyper-parameters using grid 
 
 If you find this repo useful, please cite
 ```
-@misc{zhou2022equivariant,
-      title={Equivariant Contrastive Learning for Sequential Recommendation}, 
-      author={Peilin Zhou and Jingqi Gao and Yueqi Xie and Qichen Ye and Yining Hua and Sunghun Kim},
-      year={2022},
-      eprint={2211.05290},
-      archivePrefix={arXiv},
-      primaryClass={cs.IR}
+@inproceedings{zhou2023equivariant,
+  title={Equivariant contrastive learning for sequential recommendation},
+  author={Zhou, Peilin and Gao, Jingqi and Xie, Yueqi and Ye, Qichen and Hua, Yining and Kim, Jaeboum and Wang, Shoujin and Kim, Sunghun},
+  booktitle={Proceedings of the 17th ACM Conference on Recommender Systems},
+  pages={129--140},
+  year={2023}
 }
 ```
 
